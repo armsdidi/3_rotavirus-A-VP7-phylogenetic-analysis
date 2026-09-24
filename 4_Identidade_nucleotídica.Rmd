@@ -1,0 +1,164 @@
+---
+title: "4_Identidade_nucleotídica"
+output: html_document
+date: "2026-09-17"
+editor_options: 
+  chunk_output_type: console
+---
+# Carregando os pacotes
+
+```{r setup}
+library(Biostrings)
+library(ComplexHeatmap)
+library(circlize)
+library(readxl)
+library(openxlsx)
+```
+
+# Diretórios
+
+```{r}
+BASE_DIR <- getwd()
+PHYLOGENY_DIR <- file.path(BASE_DIR, "RESULTS", "PHYLOGENY")
+FIGURES_DIR <- file.path(BASE_DIR, "RESULTS", "FIGURES")
+MATRIX_DIR <- file.path(BASE_DIR, "RESULTS", "MATRIX")
+```
+
+# Importando os arquivos
+
+```{r}
+# Metadados
+metadata = read_xlsx("metadata.xlsx")
+
+# Arquivo de alinhamento:
+alignment_file <- file.path(PHYLOGENY_DIR, paste0("viral_sequences_aligned.aliview.fasta"))
+
+# Lendo as sequências:
+sequences <- readDNAStringSet(alignment_file)
+
+# Convertendo para caracteres:
+seq_matrix <- as.matrix(sequences)
+```
+
+# Calculando a identidade nucleotidica
+
+```{r}
+# Função para calcular identidade:
+calculate_identity <- function(seq1, seq2) {
+
+  valid <- seq1 != "-" &
+           seq2 != "-" &
+           seq1 != "N" &
+           seq2 != "N"
+
+  if (sum(valid) == 0) {
+    return(NA_real_)
+  }
+
+  identity <- sum(seq1[valid] == seq2[valid]) /
+              sum(valid) * 100
+
+  return(identity)
+}
+
+# Criando a matriz:
+n <- length(sequences)
+identity_matrix <- matrix(
+  NA_real_,
+  nrow = n,
+  ncol = n,
+  dimnames = list(
+    names(sequences),
+    names(sequences)))
+
+for (i in seq_len(n)) {
+
+  for (j in seq_len(n)) {
+
+    identity_matrix[i, j] <- calculate_identity(
+      seq_matrix[i, ],
+      seq_matrix[j, ]
+    )
+  }
+}
+
+# Arredondando:
+identity_matrix <- round(identity_matrix, 2)
+
+# Alterando os nomes das linhas
+rownames(identity_matrix) = metadata$Sequence
+
+# Alterando os nomes das colunas
+colnames(identity_matrix) = metadata$Sequence
+```
+
+# Heatmap
+
+```{r}
+# Organizar metadata de acordo com a matriz:
+metadata_heatmap <- metadata[match(rownames(identity_matrix), 
+                                   metadata$Sequence),]
+
+# Conferir correspondência:
+stopifnot(all(rownames(identity_matrix) == metadata_heatmap$Sequence))
+
+# Definir nomes das linhas:
+rownames(metadata_heatmap) <- metadata_heatmap$Sequence
+
+# Definir cores das anotações:
+annotation_colors <- list(
+  Genotype = c("G1" = "#1F78B4", "G3" = "#33A02C", "G4" = "#FF7F00", "G40" = "#6A3D9A", 
+               "G9" = "#E31A1C", "G10" = "#FB9A99"),
+  Host = c("Homo sapiens" = "#4D4D4D", "Vaccine strain" = "#E31A1C", "Jungle crow" = "#33A02C"))
+
+# Definir cores das escalas:
+col = colorRamp2(
+  c(min(identity_matrix, na.rm = TRUE),
+    mean(range(identity_matrix, na.rm = TRUE)),
+    max(identity_matrix, na.rm = TRUE)),
+  c("#BC5943", "#FFFFFF", "#3F7B90"))
+
+# Anotação das colunas:
+column_annotation <- HeatmapAnnotation(
+  Genotype = metadata_heatmap$Genotype,
+  Host = metadata_heatmap$Host,
+  col = annotation_colors,
+  show_legend = TRUE)
+
+# Criar heatmap:
+p_heatmap <- Heatmap(
+  identity_matrix,
+  name = "Nucleotide identity",
+  col = col,
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  show_row_names = TRUE,
+  show_column_names = TRUE,
+  row_names_gp = gpar(fontsize = 8),
+  column_names_gp = gpar(fontsize = 8),
+  column_names_rot = 45,
+  top_annotation = column_annotation,
+  cell_fun = function(j, i, x, y, width, height, fill) {
+    grid.text(
+      sprintf("%.3f", identity_matrix[i, j]),
+      x, y, gp = gpar(fontsize = 8)
+    )
+  },
+  border = FALSE)
+
+# Visualizar:
+p_heatmap
+```
+
+# Salvando os arquivos
+
+```{r}
+# Heatmap:
+ggsave(filename = file.path(FIGURES_DIR, "heatmap_nucleotide_identity.pdf"), 
+       plot = p_heatmap, width = 12, height = 12)
+
+# Matriz de identidade nucleotídica:
+write.xlsx(identity_matrix, 
+           file.path(MATRIX_DIR,"nucleotide_identity_matrix.xlsx"), 
+           rowNames = TRUE)
+```

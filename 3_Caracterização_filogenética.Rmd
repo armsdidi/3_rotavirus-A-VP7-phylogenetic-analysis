@@ -1,0 +1,240 @@
+---
+title: "3_Caracterização_filogenética"
+output: html_document
+date: "2026-09-17"
+editor_options: 
+  chunk_output_type: console
+---
+# Carregando os pacotes
+
+```{r setup}
+library(tidyverse)
+library(ape)
+library(treeio)
+library(ggtree)
+library(ggplot2)
+library(readxl)
+library(openxlsx)
+library(ComplexHeatmap)
+library(circlize)
+library(grid)
+library(phangorn)
+```
+
+# Diretórios
+
+```{r}
+BASE_DIR <- getwd()
+PHYLOGENY_DIR <- file.path(BASE_DIR, "RESULTS", "PHYLOGENY")
+FIGURES_DIR <- file.path(BASE_DIR, "RESULTS", "FIGURES")
+MATRIX_DIR <- file.path(BASE_DIR, "RESULTS", "MATRIX")
+```
+
+# Importando a árvore filogenética
+
+```{r}
+# Árvore filogenética:
+TREE_FILE <- file.path(PHYLOGENY_DIR, "viral_phylogeny.treefile")
+tree <- read.tree(TREE_FILE)
+
+# Número de sequências:
+Ntip(tree)
+
+# Número de nós internos:
+Nnode(tree)
+
+# Identificadores das sequências:
+tree$tip.label
+```
+
+# Importando os metadados das sequências
+
+```{r}
+# Metadados:
+metadata = read_xlsx("metadata.xlsx")
+
+# Sequências presentes na árvore:
+tree_sequences <- tree$tip.label
+
+# Sequências presentes nos metadados:
+metadata_sequences <- metadata$Sequence
+
+# Sequências sem metadados:
+setdiff(tree_sequences, metadata_sequences)
+
+# Metadados sem sequência na árvore:
+setdiff(metadata_sequences, tree_sequences)
+```
+
+# Árvore filogenética (Maximum Likelihood)
+
+```{r}
+# Árvore básica:
+p1 <- ggtree(tree) +
+  geom_tiplab(size = 3) +
+  geom_text2(aes(subset = !isTip, label = label),
+    size = 2.5, hjust = 1.2, vjust = -0.5)
+print(p1)
+
+# Integrando árvore e metadados:
+p2 <- ggtree(tree) %<+% metadata + 
+  geom_tippoint(aes(color = Genotype, shape = Host), size = 3) +
+  geom_tiplab(aes(label = label), size = 3, linesize = 0.3) +
+  geom_text2(aes(subset = !isTip, label = label),
+    size = 2.5, hjust = 1.2, vjust = -0.5) +
+  theme(legend.position = "right")
+print(p2)
+
+# Destacando sequências por hospedeiro:
+p3 <- ggtree(tree) %<+% metadata +
+  geom_tippoint(aes(color = Host), size = 3) +
+  geom_tiplab(size = 3) +
+  geom_text2(aes(subset = !isTip, label = label),
+    size = 2.5, hjust = 1.2, vjust = -0.5) +
+  theme(legend.position = "right")
+print(p3)
+
+# Árvore circular:
+p4 <- ggtree(tree, layout = "circular") %<+% metadata +
+  geom_tippoint(aes(color = Genotype, shape = Host), size = 2) +
+  geom_tiplab(aes(label = label), size = 3, offset = 0.01) +
+  theme(legend.position = "right")
+print(p4)
+
+# Opção enraizada:
+tree_rooted <- phangorn::midpoint(tree)
+p_rooted <- ggtree(tree_rooted) +
+  geom_tiplab(size = 3) +
+  geom_text2(aes(subset = !isTip, label = label),
+    size = 2.5, hjust = 1.2,vjust = -0.5)
+print(p_rooted)
+```
+
+# Calculando as distâncias genéticas
+
+```{r}
+# Importando o alinhamento:
+ALIGNMENT_FILE <- file.path(PHYLOGENY_DIR, "viral_sequences_aligned.aliview.fasta")
+alignment <- read.dna(ALIGNMENT_FILE,format = "fasta")
+
+# Calculando distâncias genéticas:
+genetic_distance <- dist.dna(
+  alignment,
+  model = "raw",
+  pairwise.deletion = TRUE)
+
+# Convertendo para matriz:
+genetic_distance_matrix <- as.matrix(genetic_distance)
+
+# Alterando os nomes das linhas:
+rownames(genetic_distance_matrix) = metadata$Sequence
+
+# Alterando os nomes das colunas
+colnames(genetic_distance_matrix) = metadata$Sequence
+
+# Organizar metadata de acordo com a matriz:
+metadata_heatmap <- metadata[match(rownames(genetic_distance_matrix), 
+                                   metadata$Sequence),]
+
+# Conferir correspondência:
+stopifnot(all(rownames(genetic_distance_matrix) == metadata_heatmap$Sequence))
+
+# Definir nomes das linhas:
+rownames(metadata_heatmap) <- metadata_heatmap$Sequence
+
+# Definir cores das anotações:
+annotation_colors <- list(
+  Genotype = c("G1" = "#1F78B4", "G3" = "#33A02C", "G4" = "#FF7F00", "G40" = "#6A3D9A", 
+               "G9" = "#E31A1C", "G10" = "#FB9A99"),
+  Host = c("Homo sapiens" = "#4D4D4D", "Vaccine strain" = "#E31A1C", "Jungle crow" = "#33A02C"))
+
+# Definir cores das escalas:
+col = colorRamp2(
+  c(min(genetic_distance_matrix, na.rm = TRUE),
+    mean(range(genetic_distance_matrix, na.rm = TRUE)),
+    max(genetic_distance_matrix, na.rm = TRUE)),
+  c("#3F7B90", "#FFFFFF", "#BC5943"))
+
+# Anotação das colunas:
+column_annotation <- HeatmapAnnotation(
+  Genotype = metadata_heatmap$Genotype,
+  Host = metadata_heatmap$Host,
+  col = annotation_colors,
+  show_legend = TRUE)
+
+# Criar heatmap:
+p_heatmap <- Heatmap(
+  genetic_distance_matrix,
+  name = "Genetic distance",
+  col = col,
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  show_row_names = TRUE,
+  show_column_names = TRUE,
+  row_names_gp = gpar(fontsize = 8),
+  column_names_gp = gpar(fontsize = 8),
+  column_names_rot = 45,
+  top_annotation = column_annotation,
+  cell_fun = function(j, i, x, y, width, height, fill) {
+    grid.text(
+      sprintf("%.3f", genetic_distance_matrix[i, j]),
+      x, y, gp = gpar(fontsize = 8)
+    )
+  },
+  border = FALSE)
+
+# Visualizar:
+p_heatmap
+```
+
+# Árvore filogenética (Neighbor-Joining)
+
+```{r}
+# Neighbor-Joining:
+tree_nj <- nj(genetic_distance_matrix)
+
+# Árvore básica:
+p1_nj <- ggtree(tree_nj) +
+  geom_tiplab(size = 3)
+print(p1_nj)
+
+# Integrando árvore e metadados:
+p2_nj <- ggtree(tree_nj) %<+% metadata + 
+  geom_tippoint(aes(color = Genotype, shape = Host), size = 3) +
+  geom_tiplab(aes(label = label), size = 3, linesize = 0.3) +
+  theme(legend.position = "right")
+print(p2_nj)
+
+# Destacando sequências por hospedeiro:
+p3_nj <- ggtree(tree_nj) %<+% metadata +
+  geom_tippoint(aes(color = Host),size = 3) +
+  geom_tiplab(size = 3) +
+  theme(legend.position = "right")
+print(p3_nj)
+
+# Árvore circular:
+p4_nj <- ggtree(tree_nj, layout = "circular") %<+% metadata +
+  geom_tippoint(aes(color = Genotype, shape = Host), size = 3) +
+  geom_tiplab(aes(label = label), size = 3, offset = 0.01) +
+  theme(legend.position = "right")
+print(p4_nj)
+```
+
+# Salvando os arquivos
+
+```{r}
+# Árvores:
+ggsave(filename = file.path(FIGURES_DIR, "viral_phylogenetic_tree.pdf"), 
+       plot = p2, width = 12, height = 10)
+ggsave(filename = file.path(FIGURES_DIR, "viral_phylogenetic_tree_circular.pdf"), 
+       plot = p4, width = 12, height = 12)
+
+# Heatmap:
+ggsave(filename = file.path(FIGURES_DIR, "heatmap_genetic_distance.pdf"), 
+       plot = p_heatmap, width = 12, height = 12)
+
+# Matriz de distâncias genéticas:
+write.xlsx(genetic_distance_matrix, 
+           file.path(MATRIX_DIR,"genetic_distance_matrix.xlsx"), 
+           rowNames = TRUE)
+```
